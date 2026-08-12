@@ -1,0 +1,64 @@
+name: Promote approved staging build
+
+on:
+  workflow_dispatch:
+    inputs:
+      staging_run_id:
+        description: Successful staging workflow run ID
+        required: true
+        type: string
+  repository_dispatch:
+    types: [promote-production]
+
+concurrency:
+  group: production-pages
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve staging run ID
+        id: release
+        env:
+          MANUAL_RUN_ID: ${{ inputs.staging_run_id }}
+          DISPATCH_RUN_ID: ${{ github.event.client_payload.staging_run_id }}
+        run: |
+          run_id="${MANUAL_RUN_ID:-$DISPATCH_RUN_ID}"
+          test -n "$run_id"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+
+      - name: Download approved production-ready artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: production-site-${{ steps.release.outputs.run_id }}
+          repository: ${{ vars.STAGING_REPOSITORY }}
+          run-id: ${{ steps.release.outputs.run_id }}
+          github-token: ${{ secrets.STAGING_ARTIFACT_TOKEN }}
+          path: site
+
+      - name: Verify artifact
+        run: test -f site/index.html
+
+      - name: Upload production Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+
+  deploy-production:
+    needs: prepare
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy production Pages site
+        id: deployment
+        uses: actions/deploy-pages@v4
+
