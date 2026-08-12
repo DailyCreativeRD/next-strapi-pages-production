@@ -47,10 +47,27 @@ jobs:
       - name: Verify artifact
         run: test -f site/index.html
 
+      - name: Archive production Pages artifact
+        shell: bash
+        run: |
+          tar \
+            --dereference \
+            --hard-dereference \
+            --directory site \
+            --create \
+            --file "$RUNNER_TEMP/artifact.tar" \
+            --exclude=.git \
+            --exclude=.github \
+            --exclude='.[^/]*' \
+            .
+
       - name: Upload production Pages artifact
-        uses: actions/upload-pages-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          path: site
+          name: github-pages
+          path: ${{ runner.temp }}/artifact.tar
+          retention-days: 1
+          if-no-files-found: error
 
   deploy-production:
     needs: prepare
