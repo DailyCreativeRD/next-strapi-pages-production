@@ -20,6 +20,9 @@ permissions:
 jobs:
   prepare:
     runs-on: ubuntu-latest
+    env:
+      STAGING_REPOSITORY: ${{ vars.STAGING_REPOSITORY }}
+      FRONTEND_REPOSITORY: DailyCreativeRD/ssg-nextjs-page
     steps:
       - name: Resolve staging run ID
         id: release
@@ -31,10 +34,10 @@ jobs:
           test -n "$run_id"
           echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
 
+      # Check 1 (blocking): the ZIP downloads and its checksum matches.
       - name: Download approved production candidate
         env:
           RUN_ID: ${{ steps.release.outputs.run_id }}
-          STAGING_REPOSITORY: ${{ vars.STAGING_REPOSITORY }}
         run: |
           asset="production-site-${RUN_ID}.zip"
           base_url="https://github.com/${STAGING_REPOSITORY}/releases/download/staging-${RUN_ID}"
@@ -44,8 +47,40 @@ jobs:
           mkdir site
           unzip -q "$asset" -d site
 
-      - name: Verify artifact
-        run: test -f site/index.html
+      # The candidate must carry a manifest naming the run being promoted.
+      - name: Verify entry point and manifest
+        env:
+          RUN_ID: ${{ steps.release.outputs.run_id }}
+        run: |
+          test -f site/index.html
+          test -f site/release-manifest.txt
+          grep -Fx "run_id=${RUN_ID}" site/release-manifest.txt
+
+      # Check 2 (blocking): the run ID is a real, successful run of the
+      # staging deploy workflow, and its commit matches the manifest.
+      - name: Verify staging run identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.release.outputs.run_id }}
+        run: |
+          manifest_sha=$(grep '^source_sha=' site/release-manifest.txt | cut -d= -f2)
+          run_json=$(gh api "repos/${STAGING_REPOSITORY}/actions/runs/${RUN_ID}")
+          test "$(jq -r .path       <<<"$run_json")" = ".github/workflows/deploy-staging.yml"
+          test "$(jq -r .conclusion <<<"$run_json")" = "success"
+          test "$(jq -r .head_sha   <<<"$run_json")" = "$manifest_sha"
+
+      # Check 3 (warning only): has the frontend code moved on since this
+      # candidate was built? Promoting an older reviewed candidate is
+      # legitimate; this just makes staleness visible.
+      - name: Check frontend code freshness
+        run: |
+          manifest_sha=$(grep '^frontend_sha=' site/release-manifest.txt | cut -d= -f2)
+          current_sha=$(git ls-remote "https://github.com/${FRONTEND_REPOSITORY}.git" refs/heads/main | cut -f1)
+          if [ -z "$manifest_sha" ]; then
+            echo "::warning::Candidate has no frontend_sha in its manifest (built before the repo split?)."
+          elif [ "$current_sha" != "$manifest_sha" ]; then
+            echo "::warning::Frontend code has changed since this candidate was built (${manifest_sha} -> ${current_sha}). Consider a fresh staging run."
+          fi
 
       - name: Archive production Pages artifact
         shell: bash
