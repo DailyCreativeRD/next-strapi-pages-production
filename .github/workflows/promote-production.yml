@@ -71,13 +71,18 @@ jobs:
 
       # Check 3 (warning only): has the frontend code moved on since this
       # candidate was built? Promoting an older reviewed candidate is
-      # legitimate; this just makes staleness visible.
+      # legitimate; this just makes staleness visible. The frontend repo is
+      # private, so this reads it via the API with a read-only PAT; an
+      # expired/failing token degrades to a warning, never a block.
       - name: Check frontend code freshness
+        env:
+          GH_TOKEN: ${{ secrets.FRONTEND_REPO_TOKEN }}
         run: |
           manifest_sha=$(grep '^frontend_sha=' site/release-manifest.txt | cut -d= -f2)
-          current_sha=$(git ls-remote "https://github.com/${FRONTEND_REPOSITORY}.git" refs/heads/main | cut -f1)
           if [ -z "$manifest_sha" ]; then
             echo "::warning::Candidate has no frontend_sha in its manifest (built before the repo split?)."
+          elif ! current_sha=$(gh api "repos/${FRONTEND_REPOSITORY}/commits/main" --jq .sha); then
+            echo "::warning::Could not read ${FRONTEND_REPOSITORY} to check freshness (expired FRONTEND_REPO_TOKEN?)."
           elif [ "$current_sha" != "$manifest_sha" ]; then
             echo "::warning::Frontend code has changed since this candidate was built (${manifest_sha} -> ${current_sha}). Consider a fresh staging run."
           fi
